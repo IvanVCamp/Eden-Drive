@@ -1,9 +1,9 @@
-// cryptoUtils.js
-// Módulo utilitario de criptografía asimétrica/simétrica (RSA + AES + HKDF)
-// Usado en FRONT-002, pero también reutilizable por FRONT-001 y FRONT-005
+// src/utils/cryptoUtils.js
+// Utilities for RSA key generation, export, encryption of private key, and helper functions.
+// Uses Web Crypto API
 
 function arrayBufferToBase64(buffer) {
-  let binary = '';
+  let binary = "";
   const bytes = new Uint8Array(buffer);
   const len = bytes.byteLength;
   for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
@@ -18,6 +18,16 @@ function base64ToArrayBuffer(base64) {
   return bytes.buffer;
 }
 
+function chunkString(str, size) {
+  const numChunks = Math.ceil(str.length / size);
+  const chunks = new Array(numChunks);
+  for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
+    chunks[i] = str.substr(o, size);
+  }
+  return chunks;
+}
+
+/* ----------------- Hash / HKDF helpers ----------------- */
 export async function sha256Bytes(str) {
   const enc = new TextEncoder();
   const data = enc.encode(str);
@@ -25,48 +35,47 @@ export async function sha256Bytes(str) {
   return new Uint8Array(hashBuffer);
 }
 
-export async function deriveAesKeyFromPassword(password) {
-  const hash = await sha256Bytes(password);
-  const [firstHalf, secondHalf] = [hash.slice(0, 16), hash.slice(16)];
+export function toHex(u8) {
+  return Array.from(u8).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-  const salt = window.crypto.getRandomValues(new Uint8Array(16));
-  const ikm = await window.crypto.subtle.importKey("raw", secondHalf, "HKDF", false, ["deriveKey"]);
+export function splitInHalf(u8) {
+  const half = u8.length / 2;
+  return [u8.slice(0, half), u8.slice(half)];
+}
+
+export async function hkdfExpandToAes256(keyMaterialBytes, info = new Uint8Array([]), salt = null) {
+  const ikm = await window.crypto.subtle.importKey("raw", keyMaterialBytes, "HKDF", false, ["deriveKey"]);
+  const hkdfSalt = salt || window.crypto.getRandomValues(new Uint8Array(16));
   const derivedKey = await window.crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt,
-      info: new TextEncoder().encode("private-key-encryption"),
-    },
+    { name: "HKDF", hash: "SHA-256", salt: hkdfSalt, info },
     ikm,
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt", "decrypt"]
   );
-  return { derivedKey, salt, firstHalf };
+  return { derivedKey, salt: hkdfSalt };
 }
 
-export async function generateRSAKeyPair() {
-  return await window.crypto.subtle.generateKey(
+/* ----------------- RSA key generation & export ----------------- */
+export async function generateRSAKeyPair(modulusLength = 2048) {
+  const keyPair = await window.crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
-      modulusLength: 2048,
+      modulusLength,
       publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
       hash: "SHA-256",
     },
     true,
     ["encrypt", "decrypt"]
   );
+  return keyPair;
 }
 
 export async function exportPublicKeyToPEM(publicKey) {
   const spki = await window.crypto.subtle.exportKey("spki", publicKey);
   const b64 = arrayBufferToBase64(spki);
-  return (
-    "-----BEGIN PUBLIC KEY-----\n" +
-    b64.match(/.{1,64}/g).join("\n") +
-    "\n-----END PUBLIC KEY-----"
-  );
+  return "-----BEGIN PUBLIC KEY-----\n" + chunkString(b64, 64).join("\n") + "\n-----END PUBLIC KEY-----";
 }
 
 export async function exportPrivateKeyToPKCS8(privateKey) {
@@ -74,35 +83,56 @@ export async function exportPrivateKeyToPKCS8(privateKey) {
   return arrayBufferToBase64(pkcs8);
 }
 
-export async function encryptPrivateKey(aesKey, privateKeyBase64) {
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = base64ToArrayBuffer(privateKeyBase64);
-  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, plaintext);
+/* ----------------- AES-GCM encrypt of private key ----------------- */
+export async function encryptPrivateKeyWithAesGcm(aesKey, base64Pkcs8) {
+  const binaryString = window.atob(base64Pkcs8);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+
+  const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, bytes);
   return {
     ciphertextBase64: arrayBufferToBase64(ciphertext),
     ivBase64: arrayBufferToBase64(iv.buffer),
   };
 }
 
-export async function decryptPrivateKey(aesKey, ciphertextBase64, ivBase64) {
-  const ciphertext = base64ToArrayBuffer(ciphertextBase64);
-  const iv = new Uint8Array(base64ToArrayBuffer(ivBase64));
-  const decrypted = await window.crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, ciphertext);
-  return arrayBufferToBase64(decrypted);
-}
-
+/* ----------------- High level: generate keys and encrypt private key ----------------- */
+/**
+ * generateAndEncryptRSAKeys(username, password)
+ * - Generates RSA keypair locally
+ * - Derives AES key from second half of sha256(password) via HKDF
+ * - Encrypts private key PKCS8 with AES-GCM
+ * Returns:
+ * {
+ *   payload: { username, passwordHashPart, publicKeyPEM, encryptedPrivateKey, encryptionMetadata },
+ *   privateKeyBase64 // plaintext PKCS8 base64 (returned to allow immediate import in client)
+ * }
+ */
 export async function generateAndEncryptRSAKeys(username, password) {
-  const { derivedKey, salt, firstHalf } = await deriveAesKeyFromPassword(password);
-  const rsaPair = await generateRSAKeyPair();
-  const publicKeyPEM = await exportPublicKeyToPEM(rsaPair.publicKey);
-  const privateKeyBase64 = await exportPrivateKeyToPKCS8(rsaPair.privateKey);
-  const encrypted = await encryptPrivateKey(derivedKey, privateKeyBase64);
+  // 1) sha256(password)
+  const hashBytes = await sha256Bytes(password);
+  const [firstHalf, secondHalf] = splitInHalf(hashBytes); // Uint8Array(16), Uint8Array(16)
 
-  return {
+  // 2) derive AES key from secondHalf with HKDF (use random salt)
+  const hkdfInfo = new TextEncoder().encode("private-key-encryption");
+  const { derivedKey, salt } = await hkdfExpandToAes256(secondHalf, hkdfInfo, null);
+
+  // 3) generate RSA pair
+  const rsaPair = await generateRSAKeyPair();
+
+  // 4) export keys
+  const publicKeyPEM = await exportPublicKeyToPEM(rsaPair.publicKey);
+  const privateKeyBase64PKCS8 = await exportPrivateKeyToPKCS8(rsaPair.privateKey);
+
+  // 5) encrypt private key with derivedKey
+  const encrypted = await encryptPrivateKeyWithAesGcm(derivedKey, privateKeyBase64PKCS8);
+
+  // 6) build payload
+  const payload = {
     username,
-    passwordHashPart: Array.from(firstHalf)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join(""),
+    // Store first half as hex string to align with spec
+    passwordHashPart: toHex(firstHalf),
     publicKeyPEM,
     encryptedPrivateKey: encrypted.ciphertextBase64,
     encryptionMetadata: {
@@ -111,4 +141,19 @@ export async function generateAndEncryptRSAKeys(username, password) {
       hkdfInfo: "private-key-encryption",
     },
   };
+
+  return { payload, privateKeyBase64: privateKeyBase64PKCS8 };
 }
+
+/* ----------------- Exports ----------------- */
+export default {
+  sha256Bytes,
+  toHex,
+  splitInHalf,
+  hkdfExpandToAes256,
+  generateRSAKeyPair,
+  exportPublicKeyToPEM,
+  exportPrivateKeyToPKCS8,
+  encryptPrivateKeyWithAesGcm,
+  generateAndEncryptRSAKeys,
+};
