@@ -134,7 +134,7 @@ export default function FileCryptoDemo() {
   return (
     <div className="min-h-screen bg-gray-50 p-6 flex flex-col items-center gap-6">
       <div className="max-w-3xl w-full bg-white p-6 rounded-lg shadow">
-        <h2 className="text-xl font-semibold mb-4">FRONT-007 — Cifrado de archivos con manejo automático de claves</h2>
+        <h2 className="text-xl font-semibold mb-4">Cifrado de archivos con manejo automático de claves</h2>
 
         <div className="mb-4 text-sm text-gray-600">
           {auth.user ? (
