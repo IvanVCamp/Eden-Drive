@@ -7,193 +7,134 @@ import {
   encryptAesKeyWithPublicKey,
   packageEncryptedPayload,
   downloadJsonAsFile,
-  importPrivateKeyFromPkcs8Base64,
-  decryptAesKeyWithPrivateKey,
   importAesKeyFromRawBase64,
+  decryptAesKeyWithPrivateKey,
   decryptFileWithAesGcm,
 } from "../utils/fileCryptoUtils";
+import { UploadCloud, Download, ShieldCheck } from "lucide-react";
 
 export default function FileCryptoDemo() {
-  const { currentUser, privateKey } = useAuth();
+  const auth = useAuth();
   const [file, setFile] = useState(null);
-  const [otherRecipientPem, setOtherRecipientPem] = useState("");
   const [pkg, setPkg] = useState(null);
-  const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
+  const [working, setWorking] = useState(false);
 
   async function handleEncrypt() {
     if (!file) {
       setMessage("Selecciona un archivo primero.");
       return;
     }
-
     setWorking(true);
-    setMessage("");
     try {
-      const fileMeta = await encryptFileWithAesGcm(file);
-      const aesRawBase64 = await exportAesKeyRawBase64(fileMeta.aesKey);
+      const meta = await encryptFileWithAesGcm(file);
+      const aesRaw = await exportAesKeyRawBase64(meta.aesKey);
 
       const recipients = [];
-      if (currentUser && currentUser.publicKeyPEM) {
-        const pub = await importPublicKeyFromPem(currentUser.publicKeyPEM);
-        const encAes = await encryptAesKeyWithPublicKey(aesRawBase64, pub);
-        recipients.push({
-          id: currentUser.username,
-          encryptedAesKeyBase64: encAes,
-          publicKeyPEM: currentUser.publicKeyPEM,
-        });
+      if (auth.user && auth.user.publicKeyPEM) {
+        const pub = await importPublicKeyFromPem(auth.user.publicKeyPEM);
+        const enc = await encryptAesKeyWithPublicKey(aesRaw, pub);
+        recipients.push({ id: auth.user.username, encryptedAesKeyBase64: enc, publicKeyPEM: auth.user.publicKeyPEM });
       }
 
-      if (otherRecipientPem && otherRecipientPem.trim()) {
-        try {
-          const pub2 = await importPublicKeyFromPem(otherRecipientPem.trim());
-          const enc2 = await encryptAesKeyWithPublicKey(aesRawBase64, pub2);
-          recipients.push({
-            id: "other",
-            encryptedAesKeyBase64: enc2,
-            publicKeyPEM: otherRecipientPem.trim(),
-          });
-        } catch {}
-      }
-
-      fileMeta.aesKey = null;
-      const packaged = packageEncryptedPayload(fileMeta, recipients);
+      meta.aesKey = null;
+      const packaged = packageEncryptedPayload(meta, recipients);
       setPkg(packaged);
       downloadJsonAsFile(packaged, `${file.name}.encrypted.json`);
-      setMessage("Archivo cifrado correctamente. Paquete descargado.");
+      setMessage("Archivo cifrado y descargado correctamente.");
     } catch (err) {
-      setMessage("Error durante el cifrado: " + err.message);
+      setMessage("Error en el proceso: " + err.message);
     } finally {
       setWorking(false);
     }
   }
 
   async function handleDecryptFromPackage() {
-    setMessage("");
     if (!pkg) {
-      setMessage("No hay paquete cargado. Primero cifra o pega un paquete JSON.");
+      setMessage("Carga un paquete JSON cifrado primero.");
       return;
     }
-    if (!privateKey) {
-      setMessage("No estás autenticado o tu clave privada no está disponible en memoria para descifrar.");
+    if (!auth.user || !auth.user.privateKeyCryptoKey) {
+      setMessage("No estás autenticado o tu clave privada no está disponible.");
       return;
     }
-
     setWorking(true);
     try {
       let found = null;
       for (const r of pkg.recipients) {
-        if (r.encryptedAesKeyBase64) {
-          try {
-            const aesRawBase64 = await decryptAesKeyWithPrivateKey(
-              r.encryptedAesKeyBase64,
-              privateKey
-            );
-            found = { aesRawBase64, recipientId: r.id };
-            break;
-          } catch {}
-        }
+        try {
+          const aesRawBase64 = await decryptAesKeyWithPrivateKey(r.encryptedAesKeyBase64, auth.user.privateKeyCryptoKey);
+          found = aesRawBase64;
+          break;
+        } catch {}
       }
       if (!found) {
-        setMessage("No se pudo descifrar la clave AES con la clave privada actual.");
-        setWorking(false);
+        setMessage("No se pudo descifrar la clave AES.");
         return;
       }
-
-      const aesKey = await importAesKeyFromRawBase64(found.aesRawBase64);
-      const fileBuf = await decryptFileWithAesGcm(
-        pkg.file.ciphertextBase64,
-        pkg.file.ivBase64,
-        aesKey
-      );
-      const blob = new Blob([fileBuf], {
-        type: pkg.file.mimeType || "application/octet-stream",
-      });
+      const aesKey = await importAesKeyFromRawBase64(found);
+      const fileBuf = await decryptFileWithAesGcm(pkg.file.ciphertextBase64, pkg.file.ivBase64, aesKey);
+      const blob = new Blob([fileBuf], { type: pkg.file.mimeType || "application/octet-stream" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = pkg.file.filename || "download.bin";
-      document.body.appendChild(a);
+      a.download = pkg.file.filename || "archivo_descifrado";
       a.click();
-      a.remove();
-      setMessage(`Descifrado correcto como '${found.recipientId}'. Descarga iniciada.`);
+      setMessage("Descifrado y descarga completados.");
     } catch (err) {
-      setMessage("Error durante el descifrado: " + err.message);
+      setMessage("Error: " + err.message);
     } finally {
       setWorking(false);
     }
   }
 
-  function handlePackageUpload(e) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.target.result);
-        setPkg(parsed);
-        setMessage("Paquete cargado correctamente.");
-      } catch {
-        setMessage("Error al leer el paquete JSON.");
-      }
-    };
-    reader.readAsText(f);
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50 p-6 flex flex-col items-center gap-6">
-      <div className="max-w-3xl w-full bg-white p-6 rounded-lg shadow">
-        <h2 className="text-xl font-semibold mb-4">Cifrado de archivos con manejo automático de claves</h2>
-
-        <div className="mb-4 text-sm text-gray-600">
-          {currentUser ? (
-            <div>
-              <p>Autenticado como <strong>{currentUser.username}</strong>.</p>
-              <p className="text-xs">Clave pública cargada automáticamente desde tu cuenta.</p>
-            </div>
-          ) : (
-            <p>No estás autenticado: el cifrado aún funciona pero no se usará clave pública guardada.</p>
-          )}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col items-center p-10">
+      <div className="max-w-3xl w-full bg-white rounded-3xl shadow-2xl p-8 border border-indigo-100">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold text-gray-800">Mi Nube Segura</h1>
+          <ShieldCheck className="text-indigo-600" size={32} />
         </div>
 
-        <div className="space-y-3">
-          <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          <textarea
-            value={otherRecipientPem}
-            onChange={(e) => setOtherRecipientPem(e.target.value)}
-            className="w-full border p-2 rounded text-xs"
-            rows={4}
-            placeholder="(Opcional) clave pública PEM extra para otro destinatario"
-          />
-          <div className="flex gap-2">
+        {auth.user && (
+          <div className="mb-6 bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-sm text-gray-700">
+            Sesión activa como <strong>{auth.user.username}</strong>
+          </div>
+        )}
+
+        <div className="space-y-6">
+          <div className="flex flex-col items-center justify-center border-2 border-dashed border-indigo-300 rounded-2xl p-6 hover:bg-indigo-50 transition">
+            <UploadCloud size={40} className="text-indigo-500 mb-3" />
+            <input
+              type="file"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="w-full text-sm text-gray-700 cursor-pointer"
+            />
+          </div>
+
+          <div className="flex justify-center gap-4">
             <button
               onClick={handleEncrypt}
               disabled={working}
-              className="px-4 py-2 bg-indigo-600 text-white rounded"
+              className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-xl shadow hover:bg-indigo-700 transition disabled:opacity-60"
             >
-              {working ? "Procesando..." : "Cifrar archivo"}
+              <UploadCloud size={18} /> Cifrar archivo
             </button>
             <button
               onClick={handleDecryptFromPackage}
               disabled={working || !pkg}
-              className="px-4 py-2 bg-emerald-600 text-white rounded"
+              className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white font-semibold rounded-xl shadow hover:bg-emerald-700 transition disabled:opacity-60"
             >
-              {working ? "Procesando..." : "Descifrar paquete"}
+              <Download size={18} /> Descifrar paquete
             </button>
           </div>
-          <div className="flex gap-2">
-            <input
-              type="file"
-              accept=".json"
-              onChange={handlePackageUpload}
-              className="text-sm"
-            />
-          </div>
 
-          {message && <p className="text-sm mt-2">{message}</p>}
+          {message && <p className="text-center text-sm text-gray-700 mt-4">{message}</p>}
+
           {pkg && (
-            <pre className="mt-3 max-h-60 overflow-auto text-xs bg-gray-50 p-2 rounded">
-              {JSON.stringify(pkg, null, 2)}
-            </pre>
+            <div className="mt-6 bg-gray-50 rounded-xl border border-gray-200 p-4 max-h-64 overflow-auto text-xs text-gray-700">
+              <p className="font-semibold mb-2 text-indigo-600">Vista previa del paquete cifrado:</p>
+              <pre>{JSON.stringify(pkg, null, 2)}</pre>
+            </div>
           )}
         </div>
       </div>

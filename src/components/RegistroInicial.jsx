@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateAndEncryptRSAKeys } from "../utils/cryptoUtils";
 import { useAuth } from "../context/AuthContext";
+import { Lock, LogIn } from "lucide-react";
 
 export default function FirstLoginChangePassword() {
   const navigate = useNavigate();
@@ -19,12 +20,12 @@ export default function FirstLoginChangePassword() {
 
   function validatePasswordRules(pwd) {
     const errors = [];
-    if (pwd.length < 12) errors.push("La contraseña debe tener al menos 12 caracteres.");
-    if (!/[A-Z]/.test(pwd)) errors.push("Debe contener al menos una letra mayúscula.");
-    if (!/[a-z]/.test(pwd)) errors.push("Debe contener al menos una letra minúscula.");
-    if (!/\d/.test(pwd)) errors.push("Debe contener al menos un número.");
+    if (pwd.length < 12) errors.push("Debe tener al menos 12 caracteres.");
+    if (!/[A-Z]/.test(pwd)) errors.push("Debe incluir una letra mayúscula.");
+    if (!/[a-z]/.test(pwd)) errors.push("Debe incluir una letra minúscula.");
+    if (!/\d/.test(pwd)) errors.push("Debe incluir un número.");
     if (!/[!@#$%^&*(),.?\":{}|<>]/.test(pwd))
-      errors.push("Debe contener al menos un carácter especial.");
+      errors.push("Debe incluir un carácter especial.");
     return errors;
   }
 
@@ -38,24 +39,19 @@ export default function FirstLoginChangePassword() {
     e.preventDefault();
     setProcessing(true);
     setStatusMessage("");
-
     try {
       const res = await mockLogin(username, password);
       if (!res.ok) {
         setStatusMessage("Credenciales incorrectas");
         return;
       }
-
       if (res.firstLogin) {
         setIsFirstLogin(true);
         setShowChangeModal(true);
       } else {
         const ok = await login(username, password);
-        if (ok) {
-          navigate("/file-crypto", { state: { username } });
-        } else {
-          setStatusMessage("Error durante el inicio de sesión. Comprueba tus datos.");
-        }
+        if (ok) navigate("/file-crypto", { state: { username } });
+        else setStatusMessage("Error durante el inicio de sesión. Comprueba tus datos.");
       }
     } catch {
       setStatusMessage("Error en el login.");
@@ -73,17 +69,13 @@ export default function FirstLoginChangePassword() {
       setValidationErrors(errors);
       return;
     }
-
     setProcessing(true);
     try {
       const payload = await generateAndEncryptRSAKeys(username, newPassword);
       await registerUser(payload);
       const ok = await login(username, newPassword);
-      if (ok) {
-        navigate("/file-crypto", { state: { username } });
-      } else {
-        setStatusMessage("Error al iniciar sesión tras el registro.");
-      }
+      if (ok) navigate("/file-crypto", { state: { username } });
+      else setStatusMessage("Error durante el registro o login.");
     } catch {
       setStatusMessage("Error durante el proceso de registro o login.");
     } finally {
@@ -93,80 +85,84 @@ export default function FirstLoginChangePassword() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-6">
-        <h2 className="text-2xl font-semibold mb-4">Iniciar sesión</h2>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-white to-blue-100 flex items-center justify-center p-6">
+      <div className="max-w-md w-full bg-white/90 backdrop-blur-md border border-indigo-100 rounded-3xl shadow-2xl p-8">
+        <div className="flex items-center justify-center mb-6">
+          <div className="bg-indigo-600 text-white p-3 rounded-full shadow-md">
+            <LogIn size={28} />
+          </div>
+        </div>
 
+        <h2 className="text-2xl font-bold text-center text-gray-800 mb-6">Acceso Seguro</h2>
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">Usuario</label>
+            <label className="block text-sm font-medium text-gray-600">Usuario</label>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2"
-              placeholder="correo@empresa.com"
+              className="mt-1 w-full p-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+              placeholder="usuario@correo.com"
               required
             />
           </div>
-
           <div>
-            <label className="block text-sm font-medium text-gray-700">Contraseña</label>
+            <label className="block text-sm font-medium text-gray-600">Contraseña</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2"
-              placeholder="Contraseña"
+              className="mt-1 w-full p-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+              placeholder="••••••••"
               required
             />
             <p className="text-xs text-gray-500 mt-1">
-              Si es tu primer acceso usa la contraseña temporal.
+              Usa tu contraseña temporal si es tu primer acceso.
             </p>
           </div>
-
           <button
             type="submit"
             disabled={processing}
-            className="w-full py-2 px-4 rounded-xl bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-60"
+            className="w-full py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition disabled:opacity-60"
           >
             {processing ? "Procesando..." : "Entrar"}
           </button>
         </form>
-
-        {statusMessage && <p className="mt-4 text-sm text-green-700">{statusMessage}</p>}
+        {statusMessage && (
+          <p className="mt-4 text-center text-sm text-red-600">{statusMessage}</p>
+        )}
 
         {showChangeModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-            <div className="w-full max-w-lg bg-white rounded-2xl p-6 shadow-2xl">
-              <h3 className="text-xl font-semibold mb-2">Primer acceso — Cambia tu contraseña</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Por seguridad debes cambiar la contraseña temporal y generar tus claves RSA.
-              </p>
-
-              <form onSubmit={handleChangePasswordSubmit} className="space-y-3">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-full max-w-lg bg-white rounded-2xl p-8 shadow-2xl">
+              <div className="flex items-center mb-4 gap-3">
+                <Lock className="text-indigo-600" size={24} />
+                <h3 className="text-lg font-semibold text-gray-800">
+                  Primer acceso — Cambia tu contraseña
+                </h3>
+              </div>
+              <form onSubmit={handleChangePasswordSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium">Nueva contraseña</label>
+                  <label className="block text-sm font-medium text-gray-600">Nueva contraseña</label>
                   <input
                     type="password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2"
+                    className="mt-1 w-full p-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
                     placeholder="Nueva contraseña segura"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium">Confirmar contraseña</label>
+                  <label className="block text-sm font-medium text-gray-600">Confirmar contraseña</label>
                   <input
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2"
+                    className="mt-1 w-full p-3 border border-gray-300 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
                     placeholder="Repite la contraseña"
                     required
                   />
                 </div>
-
                 {validationErrors.length > 0 && (
                   <ul className="text-sm text-red-600 list-disc pl-5">
                     {validationErrors.map((err, i) => (
@@ -174,21 +170,20 @@ export default function FirstLoginChangePassword() {
                     ))}
                   </ul>
                 )}
-
-                <div className="flex gap-2 justify-end">
+                <div className="flex justify-end gap-3 mt-4">
                   <button
                     type="button"
                     onClick={() => setShowChangeModal(false)}
-                    className="px-4 py-2 rounded-lg border"
+                    className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-100 transition"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
                     disabled={processing}
-                    className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-60"
+                    className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 transition disabled:opacity-60"
                   >
-                    {processing ? "Generando claves..." : "Cambiar y Generar claves"}
+                    {processing ? "Generando..." : "Confirmar"}
                   </button>
                 </div>
               </form>
