@@ -1,4 +1,3 @@
-// src/components/FirstLoginChangePassword.jsx
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { generateAndEncryptRSAKeys } from "../utils/cryptoUtils";
@@ -32,7 +31,6 @@ export default function FirstLoginChangePassword() {
   async function mockLogin(username, password) {
     const INITIAL_PASSWORD = "TempPass123!";
     if (password === INITIAL_PASSWORD) return { ok: true, firstLogin: true };
-    // Cualquier otra contraseña válida simula login correcto
     return { ok: true, firstLogin: false };
   }
 
@@ -52,17 +50,14 @@ export default function FirstLoginChangePassword() {
         setIsFirstLogin(true);
         setShowChangeModal(true);
       } else {
-        setStatusMessage("Login correcto. Cargando módulo de cifrado...");
         const ok = await login(username, password);
         if (ok) {
-          console.log("✅ Login completado, navegando...");
           navigate("/file-crypto", { state: { username } });
         } else {
-          console.warn("⚠️ Login no retornó true");
+          setStatusMessage("Error durante el inicio de sesión. Comprueba tus datos.");
         }
       }
-    } catch (err) {
-      console.error("❌ Error en handleLogin:", err);
+    } catch {
       setStatusMessage("Error en el login.");
     } finally {
       setProcessing(false);
@@ -83,15 +78,13 @@ export default function FirstLoginChangePassword() {
     try {
       const payload = await generateAndEncryptRSAKeys(username, newPassword);
       await registerUser(payload);
-      setStatusMessage("Registro completado. Iniciando sesión automática...");
-
       const ok = await login(username, newPassword);
       if (ok) {
-        console.log("✅ Registro + login exitoso, navegando...");
         navigate("/file-crypto", { state: { username } });
+      } else {
+        setStatusMessage("Error al iniciar sesión tras el registro.");
       }
-    } catch (err) {
-      console.error("❌ Error durante registro/login:", err);
+    } catch {
       setStatusMessage("Error durante el proceso de registro o login.");
     } finally {
       setProcessing(false);

@@ -1,8 +1,8 @@
-// src/context/AuthContext.jsx
-import React, { createContext, useState, useContext } from "react";
+import React, { createContext, useContext, useState } from "react";
 import {
-  decryptPrivateKeyWithAesGcm,
-  sanitizeBase64,
+  decryptPrivateKeyWithPassword,
+  importPrivateKeyFromBase64,
+  deriveHalfHashFromPassword
 } from "../utils/cryptoUtils";
 
 const AuthContext = createContext();
@@ -10,47 +10,60 @@ export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
+  const [privateKey, setPrivateKey] = useState(null);
 
-  async function registerUser(userPayload) {
-    const users = JSON.parse(localStorage.getItem("app_users_v1") || "{}");
-    users[userPayload.username] = userPayload;
-    localStorage.setItem("app_users_v1", JSON.stringify(users));
-    setCurrentUser(userPayload);
+  async function registerUser(payload) {
+    const stored = JSON.parse(localStorage.getItem("app_users_v1") || "{}");
+    stored[payload.username] = payload;
+    localStorage.setItem("app_users_v1", JSON.stringify(stored));
   }
 
   async function login(username, password) {
-    const users = JSON.parse(localStorage.getItem("app_users_v1") || "{}");
-    const stored = users[username];
-    if (!stored) throw new Error("Usuario no encontrado.");
-
     try {
-      const pkcs8Base64 = await decryptPrivateKeyWithAesGcm(
-        password,
-        sanitizeBase64(stored.encryptedPrivateKey),
-        sanitizeBase64(stored.encryptionMetadata.iv),
-        sanitizeBase64(stored.encryptionMetadata.hkdfSalt)
+      const allUsers = JSON.parse(localStorage.getItem("app_users_v1") || "{}");
+      const userData = allUsers[username];
+      if (!userData) throw new Error("Usuario no encontrado");
+
+      const { encryptedPrivateKey, encryptionMetadata } = userData;
+      const { iv, hkdfSalt } = encryptionMetadata;
+
+      // Derivar la segunda mitad del hash de la contraseña igual que en el registro
+      const half = await deriveHalfHashFromPassword(password);
+
+      const pkcs8Base64 = await decryptPrivateKeyWithPassword(
+        encryptedPrivateKey,
+        iv,
+        hkdfSalt,
+        half
       );
 
-      setCurrentUser({
-        username,
-        privateKey: pkcs8Base64,
-        publicKey: stored.publicKeyPEM,
-      });
+      if (!pkcs8Base64) throw new Error("Fallo al descifrar clave privada");
 
+      const privateKeyObj = await importPrivateKeyFromBase64(pkcs8Base64);
+
+      setCurrentUser({ username, publicKeyPEM: userData.publicKeyPEM });
+      setPrivateKey(privateKeyObj);
       return true;
     } catch (err) {
-      console.error("Error al descifrar clave privada:", err);
-      throw new Error("Contraseña incorrecta o datos corruptos.");
+      console.error("Error en login():", err);
+      setCurrentUser(null);
+      setPrivateKey(null);
+      return false;
     }
   }
 
   function logout() {
     setCurrentUser(null);
+    setPrivateKey(null);
   }
 
-  return (
-    <AuthContext.Provider value={{ currentUser, registerUser, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  const value = {
+    currentUser,
+    privateKey,
+    registerUser,
+    login,
+    logout
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
